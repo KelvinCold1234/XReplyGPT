@@ -44,14 +44,6 @@ chrome.runtime.onInstalled.addListener(async function (details) {
   }
 })
 
-chrome.runtime.setUninstallURL(
-  'https://xreplygpt.com/uninstall.html'
-)
-
-chrome.runtime.onInstalled.addListener(function (details) {
-  chrome.tabs.create({ url: 'https://xreplygpt.com/welcome.html' });
-});
-
 // Helper to extract URLs from post
 function extractUrlsFromPost(postElement) {
   const links = postElement.querySelectorAll('a');
