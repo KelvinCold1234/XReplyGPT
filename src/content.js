@@ -48,10 +48,12 @@ function isNewsRelated(text) {
   return keywords.some(word => text.toLowerCase().includes(word));
 }
 
-// Image attachment function (enhanced for direct image links)
+// Image attachment function (enhanced with CORS proxy)
 async function attachImage(url) {
   try {
     console.log('Attempting to attach image from URL:', url);
+
+    const proxy = 'https://api.allorigins.win/raw?url=';  // Free CORS proxy
 
     // Check if URL is likely a direct image
     const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg'];
@@ -62,17 +64,19 @@ async function attachImage(url) {
     let mimeType = 'image/jpeg';
 
     if (isDirectImage) {
-      // Fetch direct image
-      console.log('Detected direct image link; fetching directly.');
-      const imageResponse = await fetch(url, { mode: 'cors' });
-      if (!imageResponse.ok) throw new Error('Direct image fetch failed.');
+      // Fetch direct image via proxy
+      console.log('Detected direct image link; fetching via proxy.');
+      const proxiedUrl = proxy + encodeURIComponent(url);
+      const imageResponse = await fetch(proxiedUrl);
+      if (!imageResponse.ok) throw new Error('Direct image fetch failed via proxy.');
       imageBlob = await imageResponse.blob();
       mimeType = imageBlob.type;
       fileName = url.split('/').pop() || fileName;
     } else {
-      // Fallback to page fetch and og:image
-      const response = await fetch(url);
-      if (!response.ok) throw new Error('Failed to fetch linked page.');
+      // Fallback to page fetch and og:image via proxy
+      const proxiedPageUrl = proxy + encodeURIComponent(url);
+      const response = await fetch(proxiedPageUrl);
+      if (!response.ok) throw new Error('Failed to fetch linked page via proxy.');
       const html = await response.text();
       const parser = new DOMParser();
       const doc = parser.parseFromString(html, 'text/html');
@@ -83,8 +87,9 @@ async function attachImage(url) {
       }
       console.log('Found og:image URL:', imageUrl);
 
-      const imageResponse = await fetch(imageUrl, { mode: 'cors' });
-      if (!imageResponse.ok) throw new Error('Image fetch failed (possibly CORS blocked).');
+      const proxiedImageUrl = proxy + encodeURIComponent(imageUrl);
+      const imageResponse = await fetch(proxiedImageUrl);
+      if (!imageResponse.ok) throw new Error('Image fetch failed via proxy (possibly blocked).');
       imageBlob = await imageResponse.blob();
       mimeType = imageBlob.type;
       fileName = imageUrl.split('/').pop() || fileName;
