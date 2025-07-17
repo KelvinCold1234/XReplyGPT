@@ -36,6 +36,76 @@ function hideLoadingSpinner(container) {
   }
 }
 
+// Helper to extract URLs from post
+function extractUrlsFromPost(postElement) {
+  const links = postElement.querySelectorAll('a');
+  return Array.from(links).map(a => a.href).filter(href => href.startsWith('http') && !href.includes('x.com'));
+}
+
+// Keyword fallback for news-related
+function isNewsRelated(text) {
+  const keywords = ['news', 'article', 'breaking', 'report', 'update', 'story'];
+  return keywords.some(word => text.toLowerCase().includes(word));
+}
+
+// Image attachment function (enhanced for direct image links)
+async function attachImage(url) {
+  try {
+    console.log('Attempting to attach image from URL:', url);
+
+    // Check if URL is likely a direct image
+    const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg'];
+    const isDirectImage = imageExtensions.some(ext => url.toLowerCase().endsWith(ext));
+
+    let imageBlob;
+    let fileName = 'relevant_image.jpg';
+    let mimeType = 'image/jpeg';
+
+    if (isDirectImage) {
+      // Fetch direct image
+      console.log('Detected direct image link; fetching directly.');
+      const imageResponse = await fetch(url, { mode: 'cors' });
+      if (!imageResponse.ok) throw new Error('Direct image fetch failed.');
+      imageBlob = await imageResponse.blob();
+      mimeType = imageBlob.type;
+      fileName = url.split('/').pop() || fileName;
+    } else {
+      // Fallback to page fetch and og:image
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('Failed to fetch linked page.');
+      const html = await response.text();
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+      const imageUrl = doc.querySelector('meta[property="og:image"]')?.content;
+      if (!imageUrl) {
+        console.log('No og:image found on page.');
+        return;
+      }
+      console.log('Found og:image URL:', imageUrl);
+
+      const imageResponse = await fetch(imageUrl, { mode: 'cors' });
+      if (!imageResponse.ok) throw new Error('Image fetch failed (possibly CORS blocked).');
+      imageBlob = await imageResponse.blob();
+      mimeType = imageBlob.type;
+      fileName = imageUrl.split('/').pop() || fileName;
+    }
+
+    const file = new File([imageBlob], fileName, { type: mimeType });
+
+    // Broader selector for file input
+    const fileInput = document.querySelector('input[type="file"][accept*="image/*"], input[type="file"][data-testid*="media"], input[type="file"]');
+    if (!fileInput) throw new Error('Upload input not found. Check console for selector.');
+
+    const dataTransfer = new DataTransfer();
+    dataTransfer.items.add(file);
+    fileInput.files = dataTransfer.files;
+    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    console.log('Image attached successfully:', fileName);
+  } catch (error) {
+    console.error('Image attachment failed:', error);
+  }
+}
+
 function generateReply() {
     window.articles = document.querySelectorAll('[data-testid="tweet"]');
 
@@ -48,6 +118,14 @@ function generateReply() {
             border-radius: 5px;
             border-width: 2px;
             padding: 15px;
+          }
+
+          /* Make text selectable for copy-paste */
+          .generated-reply-container, .generated-reply-container p, .generated-reply-container * {
+            user-select: text !important;
+            -webkit-user-select: text !important;
+            -moz-user-select: text !important;
+            -ms-user-select: text !important;
           }
 
           /* Styles for the button */
@@ -104,7 +182,12 @@ function generateReply() {
           }`;
 
         const user = document.querySelector('[data-testid="AppTabBar_Profile_Link"]');
-        const userHandle = '@' + user.href.split('/')[3]
+        let userHandle = '';
+        if (user && user.href) {
+          userHandle = '@' + user.href.split('/')[3];
+        } else {
+          console.log("User profile link not found; skipping self-reply check.");
+        }
 
         console.log(window.articles)
 
@@ -185,7 +268,7 @@ function generateReply() {
                 },
                 body: JSON.stringify({
                     "messages": [
-                        { role: "system", 'content': gptQuery['gpt-query'] || "You are a ghostwriter and reply to the user's tweets by talking directly to the person, you must keep it short, exclude hashtags." },
+                        { role: "system", 'content': (gptQuery['gpt-query'] || "You are a ghostwriter and reply to the user's tweets by talking directly to the person, you must keep it short, exclude hashtags.") + " Also, suggest if an image should be attached (yes/no) based on if it's news-related or contains article-like content. Respond in JSON: {\"reply\": \"your reply text\", \"attachImage\": \"yes/no\"}" },
                         { role: "user", 'content': '[username] wrote [tweet]'.replace('[username]', username).replace('[tweet]', content.innerText) }
                     ],
                     model: model['openai-model'],
@@ -227,74 +310,87 @@ function generateReply() {
             const resp = await response.json()
             hideLoadingSpinner(content);
 
+            const result = JSON.parse(resp.choices[0].message.content);
+            const replyText = result.reply;
+            const attachImageSuggested = result.attachImage === 'yes' || isNewsRelated(content.innerText);
+            const postUrls = extractUrlsFromPost(article);
+
+            console.log('AI suggested image:', result.attachImage);
+            console.log('Fallback keyword check:', isNewsRelated(content.innerText));
+            console.log('Attach image?', attachImageSuggested);
+            console.log('Found URLs:', postUrls);
+
             let p = document.createElement("p");
             p.innerHTML = "Generated reply: ";
             p.style.marginBottom = '5px';
             p.style.marginTop = '5px';
             div.appendChild(p);
 
-            resp.choices.forEach(choice => {
-                let link = document.createElement("a");
-                link.id = "generated-reply";
-                link.href = "https://twitter.com/intent/tweet?text=" + encodeURIComponent(choice.message.content) + "&in_reply_to=" + tweetId;
-                link.target = "_blank";
-                link.innerHTML = choice.message.content;
-                link.style.marginTop = '10px';
-                link.style.color = 'rgb(0, 0, 0)';
-                link.style.textDecoration = 'none';
-                try {
-                  fetch('https://ewfuuzgeekykbdmmysck.supabase.co/functions/v1/analytics', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                      user: userHandle,
-                      to_user: username,
-                      prompt: gptQuery['gpt-query'] || "default",
-                      gpt_model: model['openai-model'],
-                      tweet_content: content.innerText,
-                      reply_generated: choice.message.content,
-                    })
-                  })
-                } catch (e) {
-                  console.log(e)
-                }
+            let replyDisplay = document.createElement("p");
+            replyDisplay.id = "generated-reply";
+            replyDisplay.innerHTML = replyText;
+            replyDisplay.style.marginTop = '10px';
+            replyDisplay.style.color = 'rgb(0, 0, 0)';
+            // Ensure selectable inline
+            replyDisplay.style.userSelect = 'text';
+            div.appendChild(replyDisplay);
 
-                let buttonReply = document.createElement("button");
-                buttonReply.id = "generated-reply";
-                buttonReply.setAttribute("data-link", "https://twitter.com/intent/tweet?text=" + encodeURIComponent(choice.message.content) + "&in_reply_to=" + tweetId)
-                buttonReply.classList.add("button");
-                buttonReply.style.display = "flex";
-                buttonReply.style.alignItems = "center";
-                buttonReply.style.marginTop = "10px";
+            let buttonReply = document.createElement("button");
+            buttonReply.id = "generated-reply";
+            buttonReply.classList.add("button");
+            buttonReply.style.display = "flex";
+            buttonReply.style.alignItems = "center";
+            buttonReply.style.marginTop = "10px";
 
-                // Create an SVG element for the icon
-                let svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-                svg.setAttribute("width", "18");
-                svg.setAttribute("height", "18");
-                svg.setAttribute("viewBox", "0 0 512 512");
+            // Create an SVG element for the icon
+            let svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            svg.setAttribute("width", "18");
+            svg.setAttribute("height", "18");
+            svg.setAttribute("viewBox", "0 0 512 512");
 
-                // Create the SVG path for the paper plane icon
-                let path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-                path.setAttribute("d", "M498.1 5.6c10.1 7 15.4 19.1 13.5 31.2l-64 416c-1.5 9.7-7.4 18.2-16 23s-18.9 5.4-28 1.6L284 427.7l-68.5 74.1c-8.9 9.7-22.9 12.9-35.2 8.1S160 493.2 160 480V396.4c0-4 1.5-7.8 4.2-10.7L331.8 202.8c5.8-6.3 5.6-16-.4-22s-15.7-6.4-22-.7L106 360.8 17.7 316.6C7.1 311.3 .3 300.7 0 288.9s5.9-22.8 16.1-28.7l448-256c10.7-6.1 23.9-5.5 34 1.4z");
-                path.setAttribute("fill", "white"); // Set the icon color to the current text color
+            // Create the SVG path for the paper plane icon
+            let path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path.setAttribute("d", "M498.1 5.6c10.1 7 15.4 19.1 13.5 31.2l-64 416c-1.5 9.7-7.4 18.2-16 23s-18.9 5.4-28 1.6L284 427.7l-68.5 74.1c-8.9 9.7-22.9 12.9-35.2 8.1S160 493.2 160 480V396.4c0-4 1.5-7.8 4.2-10.7L331.8 202.8c5.8-6.3 5.6-16-.4-22s-15.7-6.4-22-.7L106 360.8 17.7 316.6C7.1 311.3 .3 300.7 0 288.9s5.9-22.8 16.1-28.7l448-256c10.7-6.1 23.9-5.5 34 1.4z");
+            path.setAttribute("fill", "white"); // Set the icon color to the current text color
 
-                svg.appendChild(path);
-                buttonReply.appendChild(svg);
+            svg.appendChild(path);
+            buttonReply.appendChild(svg);
 
-                // Add text to the button
-                let buttonText = document.createElement("span");
-                buttonText.innerText = "Send reply";
-                buttonText.style.marginLeft = "10px";
-                buttonReply.appendChild(buttonText);
+            // Add text to the button
+            let buttonText = document.createElement("span");
+            buttonText.innerText = "Send reply";
+            buttonText.style.marginLeft = "10px";
+            buttonReply.appendChild(buttonText);
 
-                let br = document.createElement("br");
-                link.appendChild(br);
-                link.appendChild(buttonReply);
+            // Add click handler to open composer, insert text, and attach image if suggested
+            buttonReply.addEventListener("click", function() {
+              const replyButton = article.querySelector('[data-testid="reply"]');
+              if (replyButton) {
+                replyButton.click();
+                setTimeout(() => {
+                  const replyBox = document.querySelector('[data-testid="tweetTextarea_0"]');
+                  if (replyBox) {
+                    replyBox.focus();
+                    document.execCommand('insertText', false, replyText);
+                    // Additional events for safety
+                    replyBox.dispatchEvent(new Event('input', { bubbles: true }));
+                    replyBox.dispatchEvent(new Event('change', { bubbles: true }));
+                    console.log('Text inserted via execCommand and events dispatched.');
+                  } else {
+                    console.error('Reply box not found; check selector.');
+                  }
+                  if (attachImageSuggested && postUrls.length > 0) {
+                    attachImage(postUrls[0]);
+                  } else {
+                    console.log('No image to attach (not suggested or no URLs).');
+                  }
+                }, 1500); // 1.5s delay
+              } else {
+                console.error("Reply button not found.");
+              }
+            });
 
-                div.appendChild(link);
-            })
+            div.appendChild(buttonReply);
 
             shadowRoot.appendChild(div);
             content.appendChild(shadowRoot);
