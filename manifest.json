@@ -1,7 +1,7 @@
 {
 "manifest_version": 3,
 "version": "7.0",
-"name": "Enhanced XReplyGPT 7.0",
+"name": "Enhanced XReplyGPT",
 "description": "The fastest way to reply to tweets using ChatGPT and the easiest way to boost your tweet impressions, with auto-attached relevant images.",
 "icons": {
 "128": "src/images/XReplyGPT.png"
